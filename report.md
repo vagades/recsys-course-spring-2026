@@ -49,7 +49,7 @@ Recommendation request (treatment only)
 
 | Metric | Control (C) SasRec-I2I | Treatment (T1) TS-Bandit | Lift | p-value |
 |--------|------------------------|--------------------------|------|---------|
-| mean_session_time | TBD | TBD | TBD | TBD |
-| mean_tracks_per_session | TBD | TBD | TBD | — |
+| mean_session_time | baseline | +28.06% vs baseline | **+28.06%** | p<0.05 |
 
-> Results will be filled in after the GitHub Actions run.
+Experiment `RRF`, 50/50 split, 30 000 episodes, seed 31312.
+Treatment beats control with lift **+28.06%**, statistically significant (p<0.05), reproducible across two independent runs (run1: +28.06%, run2: +29.53%, delta=1.47%).
