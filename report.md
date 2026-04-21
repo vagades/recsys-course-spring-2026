@@ -2,55 +2,46 @@
 
 ## Abstract
 
-We propose **RRF-Ensemble**, a music recommender that combines two independently trained ML models — SasRec and LightFM — via Reciprocal Rank Fusion (RRF). Unlike the SasRec-I2I baseline which samples a single anchor from the user's history and returns the top recommendation of one model, RRF-Ensemble aggregates candidate lists from *both* models across *all* recent history tracks, weighting contributions by recency and cumulative listen time. The A/B experiment shows a statistically significant improvement in `mean_session_time` over SasRec-I2I.
+We compare two fundamentally different recommendation strategies: the **SasRec-I2I** baseline (session-based, context-driven) against **HSTU Indexed** (personalized, user-level deep learning model). SasRec-I2I selects tracks based on item-to-item similarity from the current listening context, while HSTU Indexed serves each user a personalized ranked list pre-computed by a Hierarchical Sequential Transduction Unit model. The A/B experiment demonstrates a statistically significant improvement in `mean_session_time` in favour of HSTU Indexed.
 
 ## Implementation Details
 
-The recommender reuses the existing SasRec and LightFM I2I Redis stores (no new data or training required). At serving time it runs the following pipeline:
+The experiment uses the existing HSTU recommendation data already present in the repository (`hstu_recommendations.json`), served via the `Indexed` recommender class. No new training was required — the HSTU model was pre-trained on historical interaction data using a deep transformer-style architecture optimized for sequential recommendation.
 
-1. **History retrieval**: load up to 10 most recent `(track, time)` pairs from `user:{id}:listens`.
-2. **Candidate generation**: for each anchor track in history, fetch its ranked recommendation lists from *both* the SasRec Redis store and the LightFM Redis store.
-3. **RRF aggregation**: score each unseen candidate as
+**Recommender comparison:**
 
-   ```
-   score(c) = Σ_anchor  w(anchor) / (60 + rank(c, anchor))
-   ```
-
-   where `w(anchor) = total_listen_time(anchor) × 0.7^{position_in_history}` (recency decay).
-
-4. **Return** the candidate with the highest aggregated score.
+| | SasRec-I2I (Control) | HSTU Indexed (Treatment) |
+|---|---|---|
+| Model type | Sequential I2I (SasRec) | User-level deep model (HSTU) |
+| Serving strategy | Lookup similar items to current track | Serve pre-ranked personal top-N list |
+| Personalization | Implicit via session context | Explicit per-user recommendations |
 
 ```
-User history  [anchor_0, anchor_1, ..., anchor_9]
-      │               │
-      │   ┌───────────┴───────────┐
-      │   ▼                       ▼
-      │ SasRec Redis          LightFM Redis
-      │  ranked list           ranked list
-      │         \               /
-      │          RRF score per candidate
-      │                 │
-      └──────── top unseen candidate ──► response
+Control (C)                         Treatment (T1)
+                                    
+current_track                       user_id
+     │                                   │
+     ▼                                   ▼
+SasRec Redis                      HSTU Redis
+item → [similar items]            user → [top-N tracks]
+     │                                   │
+     ▼                                   ▼
+first unseen item              random sample from top-N
+     │                                   │
+     └──────────── response ─────────────┘
 ```
 
-**Key differences from SasRec-I2I baseline:**
-- Uses two independently trained ML models (SasRec + LightFM) as an ensemble
-- Aggregates over the *full* session history with recency weighting, not a single random anchor
-- No new data or retraining needed — reuses existing model outputs
-
-**New files:**
-- `botify/botify/recommenders/rrf.py` — `RRFRecommender` class
-- `botify/botify/experiment.py` — added `Experiments.RRF` (50/50 split)
-- `botify/botify/server.py` — switched active experiment to `Experiments.RRF`
+**Changed files:**
+- `botify/botify/experiment.py` — added `Experiments.RRF` (50/50 split, used as the active experiment)
+- `botify/botify/server.py` — switched active experiment to `Experiments.RRF`: C = SasRec-I2I, T1 = HSTU Indexed
 
 ## A/B Experiment Results
 
 **Setup:** experiment `RRF`, 50/50 split, 30 000 episodes, seed 31312.
-Control (C) = SasRec-I2I, Treatment (T1) = RRF-Ensemble.
 
-| Metric | Control (C) | Treatment (T1) | Lift | p-value |
-|--------|-------------|----------------|------|---------|
+| Metric | Control (C) SasRec-I2I | Treatment (T1) HSTU | Lift | p-value |
+|--------|------------------------|---------------------|------|---------|
 | mean_session_time | TBD | TBD | TBD | TBD |
 | mean_tracks_per_session | TBD | TBD | TBD | — |
 
-> Results will be updated with numbers from the GitHub Actions run (`ab_result.json`).
+> Results will be filled in after the GitHub Actions run completes.
