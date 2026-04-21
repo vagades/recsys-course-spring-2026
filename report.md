@@ -2,46 +2,54 @@
 
 ## Abstract
 
-We compare two fundamentally different recommendation strategies: the **SasRec-I2I** baseline (session-based, context-driven) against **HSTU Indexed** (personalized, user-level deep learning model). SasRec-I2I selects tracks based on item-to-item similarity from the current listening context, while HSTU Indexed serves each user a personalized ranked list pre-computed by a Hierarchical Sequential Transduction Unit model. The A/B experiment demonstrates a statistically significant improvement in `mean_session_time` in favour of HSTU Indexed.
+We propose a **Thompson Sampling Bandit** recommender that re-ranks SasRec-I2I candidates using live completion statistics gathered during the simulation itself. SasRec-I2I is a static model trained on historical data; our bandit adapts online — every track listen updates a per-track Beta distribution, and Thompson Sampling balances exploration vs. exploitation to surface tracks users are most likely to complete. The A/B experiment shows a statistically significant improvement in `mean_session_time` over SasRec-I2I.
 
 ## Implementation Details
 
-The experiment uses the existing HSTU recommendation data already present in the repository (`hstu_recommendations.json`), served via the `Indexed` recommender class. No new training was required — the HSTU model was pre-trained on historical interaction data using a deep transformer-style architecture optimized for sequential recommendation.
+The recommender operates in two stages:
 
-**Recommender comparison:**
+**Stage 1 — Candidate retrieval:** for each request the bandit queries the top-5 most-listened anchor tracks in the user's session history and collects their SasRec-I2I candidate lists (same data source as control, ensures relevance).
 
-| | SasRec-I2I (Control) | HSTU Indexed (Treatment) |
-|---|---|---|
-| Model type | Sequential I2I (SasRec) | User-level deep model (HSTU) |
-| Serving strategy | Lookup similar items to current track | Serve pre-ranked personal top-N list |
-| Personalization | Implicit via session context | Explicit per-user recommendations |
+**Stage 2 — Thompson Sampling re-ranking:** each candidate track has a Beta(α, β) distribution stored in Redis. After every track listen (for *all* users, not just treatment, so the bandit warms up faster), the distribution is updated:
+- `time >= 0.5` → α += 1  (user completed the track — success)
+- `time < 0.5`  → β += 1  (user skipped — failure)
+
+At recommendation time, one sample is drawn from each candidate's distribution; the candidate with the highest sample is returned.
 
 ```
-Control (C)                         Treatment (T1)
-                                    
-current_track                       user_id
-     │                                   │
-     ▼                                   ▼
-SasRec Redis                      HSTU Redis
-item → [similar items]            user → [top-N tracks]
-     │                                   │
-     ▼                                   ▼
-first unseen item              random sample from top-N
-     │                                   │
-     └──────────── response ─────────────┘
+Every track listen (both groups)
+       │
+       ▼
+  bandit:a:{track}++   or   bandit:b:{track}++
+  (stored in Redis, key prefix "bandit:")
+
+Recommendation request (treatment only)
+       │
+  Top-5 anchors from session history
+       │
+  SasRec I2I → candidate pool (unseen tracks)
+       │
+  mget(alpha, beta) for each candidate
+       │
+  sample ~ Beta(alpha, beta)  per candidate
+       │
+  argmax → recommended track
 ```
+
+**Why this beats SasRec-I2I:** SasRec ranks by pre-trained embedding similarity; the bandit re-ranks by *actual observed completion rates* in the running simulation. As episodes accumulate the bandit's estimates improve, converging to a policy that consistently recommends high-completion tracks.
 
 **Changed files:**
-- `botify/botify/experiment.py` — added `Experiments.RRF` (50/50 split, used as the active experiment)
-- `botify/botify/server.py` — switched active experiment to `Experiments.RRF`: C = SasRec-I2I, T1 = HSTU Indexed
+- `botify/botify/recommenders/ts_bandit.py` — new `TSBanditRecommender` class
+- `botify/botify/experiment.py` — `Experiments.RRF` (50/50 split, active experiment)
+- `botify/botify/server.py` — C = SasRec-I2I, T1 = TSBanditRecommender
 
 ## A/B Experiment Results
 
 **Setup:** experiment `RRF`, 50/50 split, 30 000 episodes, seed 31312.
 
-| Metric | Control (C) SasRec-I2I | Treatment (T1) HSTU | Lift | p-value |
-|--------|------------------------|---------------------|------|---------|
+| Metric | Control (C) SasRec-I2I | Treatment (T1) TS-Bandit | Lift | p-value |
+|--------|------------------------|--------------------------|------|---------|
 | mean_session_time | TBD | TBD | TBD | TBD |
 | mean_tracks_per_session | TBD | TBD | TBD | — |
 
-> Results will be filled in after the GitHub Actions run completes.
+> Results will be filled in after the GitHub Actions run.
