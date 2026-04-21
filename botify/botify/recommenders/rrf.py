@@ -4,14 +4,16 @@ Reciprocal Rank Fusion over SasRec-I2I and LightFM-I2I.
 Both sources are independently trained ML models; RRF is a standard
 ensemble technique proven in information retrieval and recsys.
 """
+from __future__ import annotations
+
 import json
 import pickle
 from collections import defaultdict
 
 from .recommender import Recommender
 
-_K_RRF = 60       # standard RRF constant (Cormack et al. 2009)
-_RECENCY_DECAY = 0.7  # weight of i-th most-recent track = 0.7^i
+_K_RRF = 60
+_RECENCY_DECAY = 0.7
 
 
 class RRFRecommender(Recommender):
@@ -19,7 +21,7 @@ class RRFRecommender(Recommender):
     For every anchor in the user's recent history, retrieve ranked
     candidate lists from TWO independent I2I models (SasRec + LightFM).
     Aggregate with Reciprocal Rank Fusion, weighting anchors by
-    cumulative listen time × recency decay.  Return the highest-scoring
+    cumulative listen time x recency decay. Return the highest-scoring
     unseen candidate.
     """
 
@@ -35,26 +37,23 @@ class RRFRecommender(Recommender):
         self.i2i_redis_lfm = i2i_redis_lfm
         self.fallback = fallback_recommender
 
-    # ------------------------------------------------------------------ #
-    def recommend_next(self, user: int, prev_track: int, prev_track_time: float) -> int:
+    def recommend_next(self, user, prev_track, prev_track_time):
         history = self._load_history(user)
         if not history:
             return self.fallback.recommend_next(user, prev_track, prev_track_time)
 
         seen = {t for t, _ in history}
 
-        # Aggregate listen time per track (handles re-listens)
-        track_total_time: dict[int, float] = defaultdict(float)
+        track_total_time = defaultdict(float)
         for track, t in history:
             track_total_time[track] += t
 
-        # Deduplicated history in recency order (most recent first)
-        seen_order: list[int] = []
+        seen_order = []
         for track, _ in history:
             if track not in seen_order:
                 seen_order.append(track)
 
-        rrf_scores: dict[int, float] = defaultdict(float)
+        rrf_scores = defaultdict(float)
 
         for position, anchor in enumerate(seen_order):
             anchor_weight = track_total_time[anchor] * (_RECENCY_DECAY ** position)
@@ -72,9 +71,8 @@ class RRFRecommender(Recommender):
 
         return self.fallback.recommend_next(user, prev_track, prev_track_time)
 
-    # ------------------------------------------------------------------ #
-    def _load_history(self, user: int) -> list[tuple[int, float]]:
-        key = f"user:{user}:listens"
+    def _load_history(self, user):
+        key = "user:{}:listens".format(user)
         raw_entries = self.listen_history_redis.lrange(key, 0, -1)
         history = []
         for raw in raw_entries:
@@ -84,7 +82,7 @@ class RRFRecommender(Recommender):
             history.append((int(entry["track"]), float(entry["time"])))
         return history
 
-    def _fetch_recs(self, redis_store, track: int) -> list[int]:
+    def _fetch_recs(self, redis_store, track):
         data = redis_store.get(track)
         if data is None:
             return []
